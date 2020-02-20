@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+#
+# Spray-out-There
+# Version: 0.3.2
 
 import argparse
 import concurrent.futures
@@ -47,7 +50,7 @@ class Login(object):
 
         if r.status_code == 401 and 'WWW-Authenticate' in r.headers and 'Basic' in r.headers['WWW-Authenticate']:
             return LoginBA(url)
-        if r.status_code == 200 and 'text/html' in r.headers['Content-Type']:
+        if r.status_code == 200 and 'Content-Type' in r.headers and 'text/html' in r.headers['Content-Type']:
             login = LoginForm(url, False)
             login.findLogin(r)
             return login if login.login_found else False
@@ -144,7 +147,7 @@ class LoginForm(Login):
                 else:
                     user_field = user_fields[0]
             else:
-                # TODO Logins with only password
+                # TODO Logins with password only
                 return
 
             pass_fields = [x.get('name') for x in inputs if x.get('type') == 'password']
@@ -228,6 +231,8 @@ class Brute(object):
         self.user_list = users
         self.pass_list = passwords
         self.creds = None
+        self.creds_verified = False
+        self.verifying = False
         self.errors = 0
         self.ref_url = login.url
         self.login_url = login.login_url
@@ -278,17 +283,36 @@ class Brute(object):
                     if self.__reverify():
                         pool.shutdown(wait=False)
                         return (self.login_url, self.creds)
-                    else:
-                        self.creds = None
+
         return False
 
     def CheckCreds(self, username: str, password: str) -> bool:
-        if self.creds or self.errors > 8:
+        while(self.verifying):
+            sleep(Brute.HTTP_TIMEOUT/2)
+        if self.errors > 8 or (self.creds and self.creds_verified):
             return False
+
         return self.__check_creds(username, password)
 
     def __reverify(self) -> bool:
-        return not self.__check_creds('foobar', 'notavalidpass')
+        while(self.verifying):
+            sleep(Brute.HTTP_TIMEOUT/2)
+        if self.errors > 8 or self.creds_verified:
+            return False
+        self.verifying = True
+        sleep(Brute.HTTP_TIMEOUT)
+        if self.__check_creds('foobar', 'notavalidpass'):
+            self.creds_verified = False
+        else:
+            self.creds_verified = self.__check_creds(self.creds[0], self.creds[1])
+
+        if not self.creds_verified:
+            self.errors += 2
+            self.creds = None
+
+        self.verifying = False
+        return self.creds_verified
+            
 
     def __check_creds(self, username: str, password: str) -> bool:
         response = self.__do_attempt(username, password)
@@ -373,7 +397,7 @@ if __name__ == "__main__":
     parser.add_argument('-p', metavar='pass', type=str, help='password')
     parser.add_argument('-U', metavar='file', type=str, help='user file')
     parser.add_argument('-P', metavar='file', type=str, help='password file')
-    parser.add_argument('-o', metavar='file', type=str, help='output file prefix')
+    parser.add_argument('-o', metavar='name', type=str, help='output files prefix')
     parser.add_argument('--filter-urls', action='store_true', help='Filter urls for certain keywords before search for logins')
     args = parser.parse_args()
 
