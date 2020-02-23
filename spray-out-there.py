@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 #
 # Spray-out-There
-# Version: 0.3.2
+# Version: 0.3.3
 
 import argparse
 import concurrent.futures
@@ -22,7 +22,7 @@ class Login(object):
 
     HTTP_TIMEOUT = 15
     HTTP_UA = { 'User-Agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:72.0) Gecko/20100101 Firefox/72.0" }
-    LOGIN_PAGES = ['login','signin','admin','panel','index.php']
+    LOGIN_PAGES = ['login','signin','admin','dashboard','panel','index.']
 
     class AuthType(str, Enum):
         BASIC_AUTH = 'BASIC AUTH'
@@ -49,31 +49,33 @@ class Login(object):
             return False
 
         if r.status_code == 401 and 'WWW-Authenticate' in r.headers and 'Basic' in r.headers['WWW-Authenticate']:
-            return LoginBA(url)
+            return LoginBA(r.url)
         if r.status_code == 200 and 'Content-Type' in r.headers and 'text/html' in r.headers['Content-Type']:
-            login = LoginForm(url, False)
+            login = LoginForm(r.url, False)
             login.findLogin(r)
             return login if login.login_found else False
 
         return False
 
     @staticmethod
-    def LoadUrlsFile(file: str, filter=True) -> list:
+    def LoadUrlsFile(file: str, filter='auto') -> list:
         with open(file, 'r') as f:
             lines = f.read().splitlines()
 
         urls = list(set([x.strip() for x in lines if x.strip().startswith('http')]))
-        if not filter:
+
+        if filter == 'no':
             return urls
-
-        filtered_urls = []
-        for u in urls:
-            path = urlparse(u).path
-            resource = path.strip('/').split('/')[-1].lower()
-            if any([resource.startswith(x) for x in Login.LOGIN_PAGES]):
-                filtered_urls.append(u.strip())
-
-        return filtered_urls
+        elif filter == 'yes' or len(urls) > 10_000:
+            filtered_urls = []
+            for u in urls:
+                path = urlparse(u).path
+                resource = path.strip('/').split('/')[-1].lower()
+                if any([resource.startswith(x) for x in Login.LOGIN_PAGES]):
+                    filtered_urls.append(u.strip())
+            return filtered_urls
+        else:
+            return urls
 
 
 class LoginBA(Login):
@@ -85,7 +87,7 @@ class LoginBA(Login):
         self.login_found = True
 
     def __eq__(self, value):
-        return self.url == value.url
+        return self.url.lower() == value.url.lower()
 
     def FindBadLogin(self) -> list:
         self.bad_logins = [{
@@ -99,7 +101,8 @@ class LoginBA(Login):
 class LoginForm(Login):
 
     USER_FIELDS = ['user','mail','login','usuario']
-    LOGIN_FAIL = ['invalid login','authentication failed','password incorrect','error!','incorrect','invalid','failed']
+    LOGIN_FAIL = ['invalid login','authentication failed','password incorrect','access denied',
+                  'error!','incorrect','invalid','failed','denied']
 
     def __init__(self, url: str, auto=True):
         super().__init__(url)
@@ -108,11 +111,21 @@ class LoginForm(Login):
             self.__tryLoginForm()
 
     def __eq__(self, value):
-        return (
-            self.login_url == value.login_url and
-            self.iuser == value.iuser and
-            self.ipass == value.ipass
-        )
+        s = urlparse(self.login_url)
+        v = urlparse(value.login_url)
+        if self.url == self.login_url and value.url == value.login_url:
+            return (
+                s.netloc == v.netloc and
+                self.iuser == value.iuser and
+                self.ipass == value.ipass
+            )
+        else:
+            return (
+                s.netloc == v.netloc and
+                s.path.lower() == v.path.lower() and
+                self.iuser == value.iuser and
+                self.ipass == value.ipass
+            )
 
     def __tryLoginForm(self):
         try:
@@ -147,7 +160,7 @@ class LoginForm(Login):
                 else:
                     user_field = user_fields[0]
             else:
-                # TODO Logins with password only
+                # TODO Login forms with password only
                 return
 
             pass_fields = [x.get('name') for x in inputs if x.get('type') == 'password']
@@ -220,6 +233,7 @@ class Brute(object):
 
     HTTP_TIMEOUT = 4
     HTTP_MAX_RETRIES = 3
+    MAX_ERRORS = 7
     HTTP_UA = { 'User-Agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:72.0) Gecko/20100101 Firefox/72.0" }
 
     def __init__(self, users: list, passwords: list, login):
@@ -270,13 +284,13 @@ class Brute(object):
                     self.bad_by = 'size'
                     self.bad_value = option['value']
 
-    def Start(self, threads=10):
-        print(self.login_url)
+    def Start(self, threads=8):
+        print('  bruteforce:', self.login_url)
         workers = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as pool:
             for password in self.pass_list:
                 for username in self.user_list:
-                    w = pool.submit(self.CheckCreds, username, password)
+                    w = pool.submit(self.CheckCreds, username, password, True)
                     workers.append(w)
             for worker in concurrent.futures.as_completed(workers):
                 if worker.result():
@@ -284,29 +298,42 @@ class Brute(object):
                         pool.shutdown(wait=False)
                         return (self.login_url, self.creds)
 
+        if self.errors > Brute.MAX_ERRORS:
+            print('  * Aborted. Too many errors:', self.login_url)
         return False
 
-    def CheckCreds(self, username: str, password: str) -> bool:
+    def CheckCreds(self, username: str, password: str, threading: bool) -> bool:
+        if self.errors > Brute.MAX_ERRORS or (self.creds and self.creds_verified):
+            return False
         while(self.verifying):
             sleep(Brute.HTTP_TIMEOUT/2)
-        if self.errors > 8 or (self.creds and self.creds_verified):
-            return False
 
-        return self.__check_creds(username, password)
+        #print(self.login_url, username, password)
+        return self.__check_creds(username, password, threading)
 
     def __reverify(self) -> bool:
+        creds = self.creds
         while(self.verifying):
             sleep(Brute.HTTP_TIMEOUT/2)
-        if self.errors > 8 or self.creds_verified:
-            return False
         self.verifying = True
+
+        if self.errors > Brute.MAX_ERRORS or self.creds_verified:
+            self.verifying = False
+            return False
+        
+        if not creds or len(creds) != 2:
+            self.verifying = False
+            return False
+
         sleep(Brute.HTTP_TIMEOUT)
-        if self.__check_creds('foobar', 'notavalidpass'):
+        if self.__check_creds('foobar', 'notavalidpass', False):
             self.creds_verified = False
         else:
-            self.creds_verified = self.__check_creds(self.creds[0], self.creds[1])
+            self.creds_verified = self.__check_creds(creds[0], creds[1], False)
 
-        if not self.creds_verified:
+        if self.creds_verified:
+            self.creds = creds
+        else:
             self.errors += 2
             self.creds = None
 
@@ -314,22 +341,28 @@ class Brute(object):
         return self.creds_verified
             
 
-    def __check_creds(self, username: str, password: str) -> bool:
+    def __check_creds(self, username: str, password: str, threading: bool) -> bool:
         response = self.__do_attempt(username, password)
         if not response:
             return False
+
+        creds = None
         if self.bad_by == 'keyword':
             if self.__by_keyword(response):
-                self.creds = (username, password)
-                return True
+                creds = (username, password)
         elif self.bad_by == 'size':
             if self.__by_size(response):
-                self.creds = (username, password)
-                return True
+                creds = (username, password)
         elif self.bad_by == 'status_code':
             if self.__by_status_code(response):
-                self.creds = (username, password)
-                return True
+                creds = (username, password)
+
+        if creds:
+            while(threading and self.verifying):
+                sleep(Brute.HTTP_TIMEOUT/2)
+            self.creds = creds
+            return True
+
         return False
 
     def __do_attempt(self, username: str, password: str):
@@ -398,13 +431,13 @@ if __name__ == "__main__":
     parser.add_argument('-U', metavar='file', type=str, help='user file')
     parser.add_argument('-P', metavar='file', type=str, help='password file')
     parser.add_argument('-o', metavar='name', type=str, help='output files prefix')
-    parser.add_argument('--filter-urls', action='store_true', help='Filter urls for certain keywords before search for logins')
+    parser.add_argument('--filter', type=str, default='auto', choices=['auto', 'yes', 'no'], help='Filter urls for certain keywords before logins search')
     args = parser.parse_args()
 
     if args.input[0].startswith('http'):
         targets = [args.input[0].strip()]
     elif path.exists(args.input[0]):
-        targets = Login.LoadUrlsFile(args.input[0], args.filter_urls)
+        targets = Login.LoadUrlsFile(args.input[0], args.filter)
     else:
         print('> Invalid input, use url or list file')
         quit()
@@ -427,7 +460,7 @@ if __name__ == "__main__":
                      '12345678','abc123','1234567','password1','12345','1234567890','123123',
                      '000000','Iloveyou','1234','1q2w3e4r5t','Qwertyuiop','Monkey','Dragon']
 
-    print('> %s targets' % len(targets))
+    print('> %s urls' % len(targets))
     print('> Searching logins ...')
     with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
         workers = [pool.submit(Login.TryLoginType, url) for url in targets]
@@ -440,9 +473,9 @@ if __name__ == "__main__":
             logins.append(r)
 
     print('> %s Logins found' % len(logins))
-    print(*[l.url for l in logins], sep='\n')
+    print(*['  found: ' + l.url for l in logins], sep='\n')
 
-    print('> Analyzing login responses ...')
+    print('> Analyzing authentication responses ...')
     with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
         workers = [pool.submit(login.FindBadLogin) for login in logins]
     concurrent.futures.wait(workers)
@@ -461,7 +494,7 @@ if __name__ == "__main__":
             result = worker.result()
             if result:
                 creds.append(result)
-                print(' [!] CREDS FOUND ', result)
+                print('> POSSIBLE CREDS FOUND ', result)
 
     if args.o:
         file_credetials = '{}_credentials.json'.format(args.o)

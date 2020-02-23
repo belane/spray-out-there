@@ -11,10 +11,10 @@ python3 spray-out-there.py urls.txt -u root -P passwords.txt
 
 ### Arguments
 ```
-  -u user        user
-  -p pass        password
-  -U file        user file
-  -P file        password file
-  -o name        output files prefix
-  --filter-urls  Filter urls for certain keywords before search for logins
+  -u user                 user
+  -p pass                 password
+  -U file                 user file
+  -P file                 password file
+  -o name                 output files prefix
+  --filter {auto,yes,no}  Filter urls for certain keywords before logins search
   ```
