@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 #
 # Spray-out-There
-# Version: 0.3.4
+# Version: 0.3.5
 
 import argparse
 import concurrent.futures
@@ -162,29 +162,31 @@ class LoginForm(Login):
                 else:
                     user_field = user_fields[0]
             else:
-                # TODO Login forms with password only
-                return
+                user_field = None
 
-            pass_fields = [x.get('name') for x in inputs if x.get('type') == 'password']
+            pass_fields = [x.get('name') or x.get('id') for x in inputs if x.get('type') == 'password']
+            if len(pass_fields) != 1 or not pass_fields[0]:
+                continue
 
             other_fields =  {
                 **dict((x.get('name'), x.get('value')) for x in inputs if x.get('name')),
                 **dict((x.get('name'), x.get('value')) for x in buttons if x.get('name'))
                 }
+
+            self.ipass = pass_fields[0]
+            if self.ipass in other_fields:
+                del other_fields[self.ipass]
+            if user_field and user_field in other_fields:
+                self.iuser = user_field
+                del other_fields[user_field]
+
             for k,v in other_fields.items():
                 if not v:
                     other_fields[k] = ''
 
-            if len(pass_fields) == 1:
-                self.ipass = pass_fields[0]
-                del other_fields[pass_fields[0]]
-                if user_field:
-                    self.iuser = user_field
-                    del other_fields[user_field]
-
-                self.login_found = True
-                self.others = other_fields
-                break
+            self.login_found = True
+            self.others = other_fields
+            break
 
     def FindBadLogin(self) -> list:
         self.bad_logins = []
@@ -193,10 +195,11 @@ class LoginForm(Login):
             **Login.HTTP_UA
         }
         payload = {
-            self.iuser: 'foo@n0n3.net',
             self.ipass: 'notavalidpass',
             **self.others
         }
+        if self.iuser:
+            payload[self.iuser] = 'foo@n0n3.net'
 
         r_get = requests.get(self.login_url, timeout=Login.HTTP_TIMEOUT, verify=False, headers=headers)
         r_post = requests.post(self.login_url, timeout=Login.HTTP_TIMEOUT, verify=False, headers=headers, data=payload)
@@ -219,7 +222,11 @@ class LoginForm(Login):
                     })
 
         if len(content) != len(content_bad) and len(content_bad) != 0:
-            payload[self.iuser] = 'bar'
+            if self.iuser:
+                payload[self.iuser] = 'bar'
+            else:
+                payload[self.ipass] = 'neitherisit'
+
             r_post_2 = requests.post(self.login_url, timeout=Login.HTTP_TIMEOUT, verify=False, headers=headers, data=payload)
             if len(content_bad) == len(r_post_2.text.lower()):
                 self.bad_logins.append(
@@ -261,6 +268,8 @@ class Brute(object):
         if self.login_type != Login.AuthType.BASIC_AUTH:
             self.iuser = login.iuser
             self.ipass = login.ipass
+            if not self.iuser:
+                self.user_list = ['']
         if self.login_type == Login.AuthType.FORM_POST:
             self.others = login.others
 
@@ -403,17 +412,20 @@ class Brute(object):
 
     def __do_form_post(self, username: str, password: str):
         payload = {
-            self.iuser: username,
             self.ipass: password,
             **self.others
         }
+        if self.iuser:
+            payload[self.iuser] = username
+
         return requests.post(self.login_url, timeout=Brute.HTTP_TIMEOUT, verify=False, headers=self.headers, data=payload)
 
     def __do_form_get(self, username: str, password: str):
         payload = {
-            self.iuser: username,
             self.ipass: password
         }
+        if self.iuser:
+            payload[self.iuser] = username
         return requests.get(self.login_url, timeout=Brute.HTTP_TIMEOUT, verify=False, headers=self.headers, params=payload)
 
     def __by_status_code(self, response) -> bool:
@@ -472,18 +484,16 @@ if __name__ == "__main__":
 
     print('> %s urls' % len(targets))
     print('> Searching logins ...')
+    logins = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
         workers = [pool.submit(Login.TryLoginType, url) for url in targets]
-    concurrent.futures.wait(workers)
-
-    logins = []
-    for w in workers:
-        r = w.result()
-        if r and r not in logins:
-            logins.append(r)
+        for worker in concurrent.futures.as_completed(workers):
+            result = worker.result()
+            if result and result not in logins:
+                logins.append(result)
+                print('  found: %s' % result.url)
 
     print('> %s Logins found' % len(logins))
-    print(*['  found: ' + l.url for l in logins], sep='\n')
 
     print('> Analyzing authentication responses ...')
     with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
