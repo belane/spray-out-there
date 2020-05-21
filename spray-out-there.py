@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 #
 # Spray-out-There
-# Version: 0.3.5
+# Version: 0.3.7
 
 import argparse
 import concurrent.futures
@@ -103,8 +103,13 @@ class LoginBA(Login):
 class LoginForm(Login):
 
     USER_FIELDS = ['user','mail','login','usuario']
-    LOGIN_FAIL = ['invalid login','invalid password','authentication failed','password incorrect',
-                  'access denied','error!','incorrect','invalid','failed','denied']
+    LOGIN_FAIL = ['authentication attempt has failed','authentication fail','auth failed','access denied',
+                  'incorrect email','incorrect user','incorrect credentials','password incorrect','error logging',
+                  'try again','do not match','did not match','didn\'t match','does not match','is not valid',
+                  'cannot log','invalid password','invalid login','invalid user','login fail','wrong user',
+                  'bad credentials','contraseña incorrect','contraseña inválid','clave incorrecta','acceso denegado',
+                  'inicio de sesión no válido','contraseña no válid','passwort falsch','waren nicht korrekt',
+                  'anmeldung ist fehlgeschlagen','login error','error!','failed','denied','incorrect']
 
     def __init__(self, url: str, auto=True):
         super().__init__(url)
@@ -467,7 +472,7 @@ if __name__ == "__main__":
     if args.u:
         users = [args.u]
     elif args.U:
-        with open(args.U, 'r') as file:
+        with open(args.U, 'rb') as file:
             users = file.read().splitlines()
     else:
         users = ['admin','root','1234','adm','administrator','demo','guest','user','operator','info','test']
@@ -475,10 +480,10 @@ if __name__ == "__main__":
     if args.p:
         passwords = [args.p]
     elif args.P:
-        with open(args.P, 'r') as file:
+        with open(args.P, 'rb') as file:
             passwords = file.read().splitlines()
     else:
-        passwords = ['admin','','test','123456','123456789','letmein','qwerty','password','1111111','123',
+        passwords = ['admin','test','123456','123456789','letmein','qwerty','password','1111111','123',
                      '12345678','abc123','1234567','password1','12345','1234567890','123123','default','demo',
                      '000000','Iloveyou','1234','1q2w3e4r5t','Qwertyuiop','Monkey','Dragon','guest']
 
