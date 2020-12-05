@@ -23,8 +23,8 @@ class Login(object):
 
     HTTP_TIMEOUT = 15
     HTTP_UA = { 'User-Agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:72.0) Gecko/20100101 Firefox/72.0" }
-    LOGIN_PAGES = ['account','adm','area','auth','conf','control','dashboard',
-                   'home','index.','login','member','panel','user','web']
+    LOGIN_PAGES = ['account','adm','area','auth','conf','control','dash',
+                   'home','index','login','member','panel','user','web']
 
     class AuthType(str, Enum):
         BASIC_AUTH = 'BASIC AUTH'
