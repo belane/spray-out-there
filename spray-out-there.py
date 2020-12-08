@@ -464,8 +464,10 @@ if __name__ == "__main__":
             targets = Login.LoadUrlsFile(args.input, args.filter)
         elif args.input.startswith('http'):
             targets = [args.input.strip()]
-
-    if not targets:
+        if not targets:
+            print('> No valid targets.')
+            quit()
+    else:
         print('> Invalid input, use url or list file')
         quit()
 
